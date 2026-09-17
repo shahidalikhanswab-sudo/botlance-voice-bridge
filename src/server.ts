@@ -33,7 +33,8 @@ await registerTwilioMediaRoute(app, {
 });
 
 app.setErrorHandler((error, _request, reply) => {
-  logger.error({ error: error.message }, "Unhandled HTTP error.");
+  const message = error instanceof Error ? error.message : "Unknown HTTP error.";
+  logger.error({ error: message }, "Unhandled HTTP error.");
   reply.status(500).send({ error: "Internal server error." });
 });
 
