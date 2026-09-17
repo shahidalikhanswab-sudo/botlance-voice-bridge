@@ -9,15 +9,26 @@ export class OpenAiRealtimeRuntime implements AiRuntime {
   async connect(config: BridgeBootstrapResponse, callbacks: AiRuntimeCallbacks): Promise<void> {
     this.callbacks = callbacks;
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY is not configured on the Voice Bridge.");
+    const credential = config.providerCredential;
+    if (!credential || credential.type !== "openai_realtime_ephemeral") {
+      throw new Error("A short-lived OpenAI Realtime credential was not supplied by BotLance.");
+    }
+    if (!credential.value) {
+      throw new Error("The OpenAI Realtime credential is empty.");
+    }
+    if (
+      typeof credential.expiresAt === "number" &&
+      credential.expiresAt <= Math.floor(Date.now() / 1000) + 5
+    ) {
+      throw new Error("The OpenAI Realtime credential expired before the call could connect.");
     }
 
+    // The bridge never stores a tenant's long-lived OpenAI API key. BotLance
+    // decrypts BYOK server-side and mints this per-call short-lived credential.
     const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(config.model)}`;
     const ws = new WebSocket(url, {
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${credential.value}`,
       },
     });
     this.ws = ws;
