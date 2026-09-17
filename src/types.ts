@@ -1,5 +1,11 @@
 export type VoiceProviderId = "openai" | "gemini";
 
+export interface BridgeProviderCredential {
+  type: "openai_realtime_ephemeral";
+  value: string;
+  expiresAt: number | null;
+}
+
 export interface BridgeBootstrapResponse {
   callId: string;
   voiceSessionId: string;
@@ -15,6 +21,12 @@ export interface BridgeBootstrapResponse {
     description: string;
     parameters: Record<string, unknown>;
   }>;
+  /**
+   * Short-lived provider credential minted by the BotLance control plane from
+   * the tenant's existing BYOK configuration. The bridge must never persist or
+   * log this value.
+   */
+  providerCredential?: BridgeProviderCredential;
 }
 
 export interface BridgeToolRequest {

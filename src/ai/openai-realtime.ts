@@ -9,15 +9,26 @@ export class OpenAiRealtimeRuntime implements AiRuntime {
   async connect(config: BridgeBootstrapResponse, callbacks: AiRuntimeCallbacks): Promise<void> {
     this.callbacks = callbacks;
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY is not configured on the Voice Bridge.");
+    const credential = config.providerCredential;
+    if (!credential || credential.type !== "openai_realtime_ephemeral") {
+      throw new Error("A short-lived OpenAI Realtime credential was not supplied by BotLance.");
+    }
+    if (!credential.value) {
+      throw new Error("The OpenAI Realtime credential is empty.");
+    }
+    if (
+      typeof credential.expiresAt === "number" &&
+      credential.expiresAt <= Math.floor(Date.now() / 1000) + 5
+    ) {
+      throw new Error("The OpenAI Realtime credential expired before the call could connect.");
     }
 
+    // The bridge never stores a tenant's long-lived OpenAI API key. BotLance
+    // decrypts BYOK server-side and mints this per-call short-lived credential.
     const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(config.model)}`;
     const ws = new WebSocket(url, {
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${credential.value}`,
       },
     });
     this.ws = ws;
@@ -27,18 +38,33 @@ export class OpenAiRealtimeRuntime implements AiRuntime {
 
       ws.once("open", () => {
         clearTimeout(timer);
-        ws.send(JSON.stringify({
-          type: "session.update",
-          session: {
-            modalities: ["audio", "text"],
-            instructions: config.instructions,
-            voice: config.voice,
-            input_audio_format: "g711_ulaw",
-            output_audio_format: "g711_ulaw",
-            tools: config.tools,
-            tool_choice: "auto"
-          }
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "session.update",
+            session: {
+              type: "realtime",
+              instructions: config.instructions,
+              output_modalities: ["audio"],
+              audio: {
+                input: {
+                  format: { type: "audio/pcmu" },
+                  transcription: { model: "gpt-4o-mini-transcribe" },
+                  turn_detection: {
+                    type: "server_vad",
+                    create_response: true,
+                    interrupt_response: true,
+                  },
+                },
+                output: {
+                  format: { type: "audio/pcmu" },
+                  voice: config.voice,
+                },
+              },
+              tools: config.tools,
+              tool_choice: "auto",
+            },
+          }),
+        );
         resolve();
       });
 
@@ -56,7 +82,12 @@ export class OpenAiRealtimeRuntime implements AiRuntime {
         return;
       }
 
-      if (event.type === "response.audio.delta" && typeof event.delta === "string") {
+      // Current Realtime event name. Keep the legacy alias temporarily so a
+      // provider-side compatibility window cannot silently drop phone audio.
+      if (
+        (event.type === "response.output_audio.delta" || event.type === "response.audio.delta") &&
+        typeof event.delta === "string"
+      ) {
         callbacks.onAudio(event.delta);
         return;
       }
@@ -98,22 +129,26 @@ export class OpenAiRealtimeRuntime implements AiRuntime {
 
   appendTelephonyAudio(base64Mulaw8000: string): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({
-      type: "input_audio_buffer.append",
-      audio: base64Mulaw8000,
-    }));
+    this.ws.send(
+      JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio: base64Mulaw8000,
+      }),
+    );
   }
 
   sendToolResult(callId: string, _name: string, output: unknown): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify(output),
-      },
-    }));
+    this.ws.send(
+      JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(output),
+        },
+      }),
+    );
     this.ws.send(JSON.stringify({ type: "response.create" }));
   }
 
